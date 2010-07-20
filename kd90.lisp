@@ -112,6 +112,40 @@
 					       (random 1d0))))))
    (defparameter *tree* (build 0 (1- n)))))
 
+(defun distance2 (i j)
+  (let ((sum 0))
+    (dotimes (k +dim+)
+      (let ((v (- (px i k) (px j k))))
+	(incf sum (* v v))))
+    sum))
+
+(defun nn (target tree perm)
+  (let ((dist 1e20)
+	(nearest 0))
+    (labels ((rec (node)
+	       (with-slots (bucket lopt hipt cutval cutdim loson hison)
+		   node
+		(if bucket
+		    (loop for i from lopt upto hipt do
+			 (let ((d (distance2 (aref perm i) target)))
+			   (when (< d dist)
+			     (setf dist d
+				   nearest (aref perm i)))))
+		    (let ((val cutval)
+			  (x (px target cutdim)))
+		      (if (< x val)
+			  (progn (rec loson)
+				 (when (< val (+ x dist))
+				   (rec hison)))
+			  (progn (rec hison)
+				 (when (< (- x dist) val)
+				   (rec loson)))))))))
+      (rec tree))
+    nearest))
+
+#+nil
+(nn 5 *tree* *perm*)
+
 (defun draw-tree (root minx maxx miny maxy)
   (let ((boxes (list (list minx maxx miny maxy))))
    (labels ((rec (root)
@@ -160,7 +194,7 @@
 	   (eps-lineto x0 y0))))
 
 
-(defun eps-tree ()
+(defun eps-tree (boxes)
   (with-open-file (s "/home/martin/tmp/tree.eps" :direction :output
 		     :if-exists :supersede)
     (format s "%!PS-Adobe-3.0
@@ -170,7 +204,7 @@
 400.0 400.0 scale
 0.002 setlinewidth
 0 setgray~%")
-   (loop for b in *boxes* do
+   (loop for b in boxes do
 	(format s "~a" (eps-rectangle b)))
    (format s "%%EOF")))
 
