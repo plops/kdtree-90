@@ -26,6 +26,26 @@
 		   dim j))))
     dim))
 
+(defun make-perm (n)
+  (make-array n :element-type 'fixnum
+	      :initial-contents (loop for i below n collect i)))
+
+(defun make-random-points (n)
+  (make-array n :element-type '(array * (#.+dim+))
+	      :initial-contents
+	      (loop for i below n collect
+		   (make-array +dim+
+			       :initial-contents
+			       (loop repeat +dim+ collect
+				    (random 1d0))))))
+
+#+nil
+(loop repeat 40 collect
+ (let* ((n 1000)
+	(*perm* (make-perm n))
+	(*points* (make-random-points n)))
+   (find-max-spread 0 (1- n))))
+
 (defun swap (a b)
   (let ((h (aref *perm* a)))
     (setf (aref *perm* a) (aref *perm* b)
@@ -34,9 +54,7 @@
 (defun select (l u m cutdim)
   (labels ((p (l) ;; accessor
 	     (px l cutdim)))
-    (format t "los gehts~%")
-    (loop
-       (format t "~a~%" (list 'loop l u))
+     (loop
        (if (<= u (1+ l))
 	   (progn
 	     (when (and (= u (1+ l))
@@ -57,7 +75,6 @@
 		    (a (p i)))
 	       (loop ;; scan up and down, put big elements right, small
 		  ;; ones left
-		  (format t "~a~%" (list 'loopij i j))
 		  (loop do (incf i) while (< (p i) a))
 		  (loop do (decf j) while (< a (p j)))
 		  (when (< j i) (return))
@@ -67,21 +84,13 @@
 	       (when (<= m j) (setf u (1- j)))
 	       (when (<= j m) (setf l i))))))))
 #+nil
-(let* ((n 10)
-       (*perm* (make-array n :element-type 'fixnum
-			   :initial-contents (loop for i below n collect i)))
-       (*points* (make-array n :element-type '(array * (#.+dim+))
-			     :initial-contents
-			     (loop for i below n collect
-				  (make-array +dim+
-					      :initial-contents
-					      (loop repeat +dim+ collect
-						   (random 1d0)))))))
+(let* ((n 35)
+       (*perm* (make-perm n))
+       (*points* (make-random-points n)))
   (select 0 (1- n) (floor (+ 0 (1- n)) 2)
 	  0)
-  (loop for i below n collect (list (read-from-string
-				     (format nil "~2,2f" (px i 0))))))
-
+  (loop for i below n collect (read-from-string
+			       (format nil "~d" (px i 0)))))
 
 (defun build (l u)
   (if (<= (1+ (- u l)) 2)
@@ -98,19 +107,11 @@
 		   :hison (build (1+ m) u)))))
 
 #+nil
-(time
- (let* ((n 300))
+(let* ((n 300))
    (setf 
-    *perm* (make-array n :element-type 'fixnum
-		       :initial-contents (loop for i below n collect i))
-    *points* (make-array n :element-type '(array * (#.+dim+))
-			 :initial-contents
-			 (loop for i below n collect
-			      (make-array +dim+
-					  :initial-contents
-					  (loop repeat +dim+ collect
-					       (random 1d0))))))
-   (defparameter *tree* (build 0 (1- n)))))
+    *perm* (make-perm n)
+    *points* (make-random-points n))
+   (defparameter *tree* (build 0 (1- n))))
 
 (defun distance2 (i j)
   (let ((sum 0))
@@ -146,7 +147,78 @@
 #+nil
 (nn 5 *tree* *perm*)
 
-(defun draw-tree (root minx maxx miny maxy)
+(defun split-box (dim box lo-p cut)
+  (destructuring-bind (px py qx qy)
+      box
+    (if (eq dim 0)
+	(if lo-p
+	    (list px py cut qy)
+	    (list cut py qx qy))
+	(if lo-p
+	    (list px py qx cut)
+	    (list px cut qx qy)))))
+#+nil
+(split-box 0 (list 0 0 1 1) t .5)
+
+(defun readable-float (x)
+  (read-from-string 
+   (format nil "~2,4f" x)))
+
+(defun draw-tree-boxes (tree)
+  (let ((boxes nil))
+   (labels ((rec (node box)
+	      (with-slots (bucket loson hison cutdim cutval)
+		  node
+		(unless bucket
+		  (when (or (node-bucket loson)
+			    (node-bucket hison))
+		    (push box boxes)
+		    #+nil (format t "~a~%" (mapcar #'readable-float box)))
+		  (rec loson (split-box cutdim box t cutval))
+		  (rec hison (split-box cutdim box nil cutval))))))
+     (rec tree (list 0 0 1 1)))
+   boxes))
+
+#+nil
+(defparameter *boxes*
+ (draw-tree-boxes *tree*))
+
+(defun dot-draw-tree (stream root)
+  (labels ((transform-dim (cutdim)
+	     (ecase cutdim
+	       (0 'x)
+	       (1 'y)))
+	   (rec (node)
+	     (with-slots (bucket hison loson cutdim cutval hipt lopt)
+		 node
+	       (unless bucket
+		 (labels ((down (node)
+			    (with-slots (bucket cutdim cutval lopt hipt)
+				node
+			      (if bucket
+				  (list lopt hipt)
+				  (list (transform-dim cutdim)
+					(readable-float cutval))))))
+		   (let ((here (list (transform-dim cutdim)
+				     (readable-float cutval)))
+			 (left (down loson))
+			 (right (down hison)))
+		     (format stream "\"~a\" -> \"~a\";~%"
+			     here left)
+		     (format stream "\"~a\" -> \"~a\";~%"
+			     here right)))
+		 (rec loson)
+		 (rec hison)))))
+    (format stream "digraph {~%")
+    (rec root)
+    (format stream "}~%")))
+
+#+nil
+(with-open-file (s "/home/martin/tmp/tree.dot" :direction :output
+		   :if-exists :supersede)
+ (dot-draw-tree s *tree*))
+
+#+nil (defun draw-tree (root minx maxx miny maxy)
   (let ((boxes (list (list minx maxx miny maxy))))
    (labels ((rec (root)
 	      (with-slots (bucket hison loson
@@ -193,6 +265,9 @@
 	   (eps-lineto x0 y)
 	   (eps-lineto x0 y0))))
 
+(defun eps-point (x y)
+  (format nil "newpath ~f ~f 0.004 0 360 arc closepath fill~%" x y))
+
 
 (defun eps-tree (boxes)
   (with-open-file (s "/home/martin/tmp/tree.eps" :direction :output
@@ -201,12 +276,15 @@
 %%Pages: 1
 %%BoundingBox: 0 0 700 500
 %%EndComments
+10 10 translate
 400.0 400.0 scale
 0.002 setlinewidth
 0 setgray~%")
    (loop for b in boxes do
 	(format s "~a" (eps-rectangle b)))
+   (loop for p across *points* do
+     (format s "~a" (eps-point (aref p 0) (aref p 1))))
    (format s "%%EOF")))
 
 #+nil
-(eps-tree)
+(eps-tree *boxes*)
