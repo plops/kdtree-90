@@ -6,12 +6,17 @@
 (declaim (optimize (speed 2) (safety 3) (debug 3)))
 
 (defpackage :kdtree
-  (:use :cl :alexandria :vector))
+  (:use :cl :alexandria))
 
 (in-package :kdtree)
 
-(defconstant +dim+ 2)
+(defconstant +dim+ 3)
 (declaim (fixnum +dim+))
+
+(deftype vec ()
+  (ecase +dim+
+    (2 'vector:vec2)
+    (3 'vector:vec)))
 
 (deftype axis ()
   `(member ,@(loop for i below +dim+ collect i)))
@@ -31,12 +36,12 @@
 
 (defstruct kd-tree
   (root nil :type (or null node))
-  (points (required-argument :points) :type (simple-array vec2 1))
+  (points (required-argument :points) :type (simple-array vec 1))
   (perm (required-argument :perm) :type (simple-array array-index 1)))
 
-(defparameter *points* (make-array 0 :element-type 'vec2))
+(defparameter *points* (make-array 0 :element-type 'vec))
 (defparameter *perm* (make-array 0 :element-type 'array-index))
-(declaim ((simple-array vec2 1) *points*)
+(declaim ((simple-array vec 1) *points*)
 	 ((simple-array array-index 1) *perm*))
 (declaim (inline px))
 (defun px (i j)
@@ -81,7 +86,7 @@
 
 (defun make-random-points (n)
   (declare (array-index n)
-	   (values (simple-array vec2 1) &optional))
+	   (values (simple-array vec 1) &optional))
   (make-array n :element-type '(array * (#.+dim+))
 	      :initial-contents
 	      (loop for i below n collect
@@ -156,19 +161,20 @@
 (defun build (l u)
   (declare (array-index l u)
 	   (values (or node leaf) &optional))
-  (if (<= (1+ (- u l)) 1)
-      (make-leaf :lopt l
-		 :hipt u)
-      (let ((cutdim (find-max-spread-dimension l u))
-	    (m (floor (+ l u) 2)))
-	(select l u m cutdim)
-	(make-node :cutdim cutdim 
-		   :cutval (px m cutdim)
-		   :loson (build l m)
-		   :hison (build (1+ m) u)))))
+  (let ((points-in-bucket 14))
+   (if (<= (1+ (- u l)) (1- points-in-bucket))
+       (make-leaf :lopt l
+		  :hipt u)
+       (let ((cutdim (find-max-spread-dimension l u))
+	     (m (floor (+ l u) 2)))
+	 (select l u m cutdim)
+	 (make-node :cutdim cutdim 
+		    :cutval (px m cutdim)
+		    :loson (build l m)
+		    :hison (build (1+ m) u))))))
 
 (defun build-new-tree (points)
-  (declare ((simple-array vec2 1) points)
+  (declare ((simple-array vec 1) points)
 	   (values kd-tree &optional))
   (let* ((n (length points))
 	 (*points* points)
@@ -231,8 +237,14 @@
        nearest)))
 
 #+nil
-(nn 4 *tree*)
+(let* ((n 30000))
+  (time (defparameter *tree* (build-new-tree (make-random-points n))))
+  (time (dotimes (i n) (nn i *tree*))))
 
+;; 10s to find all nn for 30000 points when 2, 9 or 14 points in bucket
+;; 11.5s for 20 points in bucket
+;; 14s for 50 points in bucket
+#+nil
 (progn
 ;; for debugging I draw the points and the rectangles into an eps
 ;; file.  There is also a function that writes the tree in a format
@@ -356,7 +368,7 @@ converted with dot -Tps -o test.ps file.dot."
 
 (defun eps-tree (fn boxes points)
   (declare (list boxes)
-	   ((simple-array vec2 1) points)
+	   ((simple-array vec 1) points)
 	   (string fn))
   (with-open-file (s fn :direction :output
 		     :if-exists :supersede)
