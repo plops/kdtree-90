@@ -1,7 +1,7 @@
 #.(require :alexandria)
 #.(require :vector)
 
-;; 1990bentley_kdtree-c++.pdf
+;; p0717/1990bentley_kdtree-c++.pdf
 
 (declaim (optimize (speed 2) (safety 3) (debug 3)))
 
@@ -156,7 +156,7 @@
 (defun build (l u)
   (declare (array-index l u)
 	   (values (or node leaf) &optional))
-  (if (< (1+ (- u l)) 1)
+  (if (<= (1+ (- u l)) 1)
       (make-leaf :lopt l
 		 :hipt u)
       (let ((cutdim (find-max-spread-dimension l u))
@@ -184,14 +184,14 @@
 (let* ((n 300))
   (defparameter *tree* (build-new-tree (make-random-points n))))
 
-(defun distance^2 (i j)
+(defun distance (i j)
   (declare (array-index i j)
 	   (values double-float &optional))
   (let ((sum 0d0))
     (dotimes (k +dim+)
       (let ((v (- (px i k) (px j k))))
 	(incf sum (* v v))))
-    sum))
+    (sqrt sum)))
 
 (defun nn (target kd-tree)
    (declare (array-index target)
@@ -199,29 +199,33 @@
 	    (values array-index &optional))
    (with-slots (perm points root)
        kd-tree
-     (let* ((dist^2 1d20)
+     (let* ((dist 1d20)
 	    (nearest 0)
 	    (*points* points)
 	    (*perm* perm))
        (labels ((rec (node)
 		  (declare ((or leaf node) node))
 		  (etypecase node
+		    ;; sequential search in the bucket of the leaf
 		    (leaf (with-slots (lopt hipt)
 			      node
 			    (loop for i from lopt upto hipt do
-				 (let ((d (distance^2 (aref perm i) target)))
-				   (when (< d dist^2)
-				     (setf dist^2 d
-					   nearest (aref perm i)))))))
+				 (let ((d (distance (aref perm i) target)))
+				   (when (< d dist)
+				     (setf dist d
+					   nearest (aref perm i)))))
+			    (return-from rec nil)))
+		    ;; search in the closer son, if nothing there,
+		    ;; search in farther son as well
 		    (node (with-slots (cutval cutdim loson hison)
 			      node
 			    (let ((x (px target cutdim)))
 			      (if (< x cutval)
 				  (progn (rec loson)
-					 (when (< cutval (+ x dist^2))
+					 (when (< cutval (+ x dist))
 					   (rec hison)))
 				  (progn (rec hison)
-					 (when (< (- x dist^2) cutval)
+					 (when (< (- x dist) cutval)
 					   (rec loson))))))))))
 	 (rec root))
        nearest)))
