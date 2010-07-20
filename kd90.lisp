@@ -1,58 +1,115 @@
-(defstruct node
-  (bucket)
-  (cutdim)
-  (cutval)
-  (loson)
-  (hison)
-  (lopt)
-  (hipt))
+#.(require :alexandria)
+#.(require :vector)
+
+;; 1990bentley_kdtree-c++.pdf
+
+(declaim (optimize (speed 2) (safety 3) (debug 3)))
+
+(defpackage :kdtree
+  (:use :cl :alexandria :vector))
+
+(in-package :kdtree)
 
 (defconstant +dim+ 2)
-(defparameter *points* nil)
-(defparameter *perm* nil)
+(declaim (fixnum +dim+))
 
+(deftype axis ()
+  `(member ,@(loop for i below +dim+ collect i)))
+
+(deftype array-index ()
+  `(unsigned-byte 29))
+
+(defstruct leaf
+  (lopt (required-argument :lopt) :type array-index)
+  (hipt (required-argument :hipt) :type array-index))
+
+(defstruct node
+  (cutdim (required-argument :cutdim) :type axis)
+  (cutval (required-argument :cutval) :type double-float)
+  (loson (required-argument :loson) :type (or node leaf))
+  (hison (required-argument :hison) :type (or node leaf)))
+
+(defstruct kd-tree
+  (root nil :type (or null node))
+  (points (required-argument :points) :type (simple-array vec2 1))
+  (perm (required-argument :perm) :type (simple-array array-index 1)))
+
+(defparameter *points* (make-array 0 :element-type 'vec2))
+(defparameter *perm* (make-array 0 :element-type 'array-index))
+(declaim ((simple-array vec2 1) *points*)
+	 ((simple-array array-index 1) *perm*))
+(declaim (inline px))
 (defun px (i j)
+  (declare (array-index i j)
+	   (values double-float &optional))
   (aref (aref *points* (aref *perm* i)) j))
 
-(defun find-max-spread (l u)
-  (let ((spread 0)
-	(dim 0))
-    (loop for j from 0 below +dim+ do
-	 (let* ((mi (loop for i from l upto u minimize (px i j)))
-		(ma (loop for i from l upto u maximize (px i j)))
-		(v (- ma mi)))
-	   (when (< spread v)
-	     (setf spread v
-		   dim j))))
+(defun max-spread-in-dim (dim l u)
+  (declare (array-index l u)
+	   (axis dim)
+	   (values double-float &optional))
+  (let ((mi (px l dim))
+	(ma (px l dim)))
+    (loop for i from (1+ l) upto u do
+	 (let ((v (px i dim)))
+	   (when (< v mi)
+	     (setf mi v))
+	   (when (< ma v)
+	     (setf ma v))))
+    (- ma mi)))
+
+(defun find-max-spread-dimension (l u)
+  (declare (array-index l u)
+	   (values axis &optional))
+  (let ((spread 0d0)
+	(dim (the axis 0)))
+    (declare (double-float spread))
+    (dotimes (j +dim+)
+      (let ((v (max-spread-in-dim j l u)))
+	(when (< spread v)
+	  (setf spread v
+		dim j))))
     dim))
 
-(defun make-perm (n)
-  (make-array n :element-type 'fixnum
-	      :initial-contents (loop for i below n collect i)))
+(defun make-random-vec-of-dim (dim)
+  (declare ((integer 0) dim)
+	   (values (simple-array double-float 1) &optional))
+  (make-array dim
+	      :element-type 'double-float
+	      :initial-contents (loop repeat dim collect
+				     (random 1d0))))
 
 (defun make-random-points (n)
+  (declare (array-index n)
+	   (values (simple-array vec2 1) &optional))
   (make-array n :element-type '(array * (#.+dim+))
 	      :initial-contents
 	      (loop for i below n collect
-		   (make-array +dim+
-			       :initial-contents
-			       (loop repeat +dim+ collect
-				    (random 1d0))))))
+		   (make-random-vec-of-dim +dim+))))
 
-#+nil
-(loop repeat 40 collect
- (let* ((n 1000)
-	(*perm* (make-perm n))
-	(*points* (make-random-points n)))
-   (find-max-spread 0 (1- n))))
+#+nil ;; check that all dimensions appear for random points
+(loop repeat 30 collect
+     (let* ((n 1000)
+	    (kd (build-new-tree (make-random-points n)))
+	    (*perm* (kd-tree-perm kd))
+	    (*points* (kd-tree-points kd)))
+       (find-max-spread-dimension 0 (1- n))))
 
 (defun swap (a b)
+  (declare (array-index a b)
+	   (values null &optional))
   (let ((h (aref *perm* a)))
     (setf (aref *perm* a) (aref *perm* b)
-	  (aref *perm* b) h)))
+	  (aref *perm* b) h))
+  nil)
 
 (defun select (l u m cutdim)
+  (declare (array-index l u m)
+	   (axis cutdim)
+	   (values fixnum &optional))
   (labels ((p (l) ;; accessor
+	     (declare (fixnum l)
+		      (values double-float &optional))
 	     (px l cutdim)))
      (loop
        (if (<= u (1+ l))
@@ -63,9 +120,12 @@
 	     (return-from select (aref *perm* m)))
 	   (let ((mid (floor (+ u l) 2)))
 	     (swap mid (1+ l))
-	     ;; rearrange for p[l]<=p[l+1]<=p[u]
 	     (labels ((enforce-order (l u)
-			(when (< (p u) (p l)) (swap u l))))
+			(declare (fixnum l u)
+				 (values null &optional))
+			(when (< (p u) (p l)) (swap u l))
+			nil))
+	       ;; rearrange for p[l]<=p[l+1]<=p[u]
 	       (enforce-order l u)
 	       (enforce-order (1+ l) u)
 	       (enforce-order l (1+ l)))
@@ -83,6 +143,7 @@
 		     (aref *perm* j) ia)
 	       (when (<= m j) (setf u (1- j)))
 	       (when (<= j m) (setf l i))))))))
+
 #+nil
 (let* ((n 35)
        (*perm* (make-perm n))
@@ -93,116 +154,162 @@
 			       (format nil "~d" (px i 0)))))
 
 (defun build (l u)
-  (if (<= (1+ (- u l)) 2)
-      (make-node :bucket t
-		 :lopt l
+  (declare (array-index l u)
+	   (values (or node leaf) &optional))
+  (if (< (1+ (- u l)) 1)
+      (make-leaf :lopt l
 		 :hipt u)
-      (let ((cutdim (find-max-spread l u))
+      (let ((cutdim (find-max-spread-dimension l u))
 	    (m (floor (+ l u) 2)))
 	(select l u m cutdim)
-	(make-node :bucket nil
-		   :cutdim cutdim 
+	(make-node :cutdim cutdim 
 		   :cutval (px m cutdim)
 		   :loson (build l m)
 		   :hison (build (1+ m) u)))))
 
+(defun build-new-tree (points)
+  (declare ((simple-array vec2 1) points)
+	   (values kd-tree &optional))
+  (let* ((n (length points))
+	 (*points* points)
+	 (*perm* (make-array n
+			     :element-type 'array-index
+			     :initial-contents 
+			     (loop for i below n collect i)))
+	 (root (build 0 (1- n))))
+    (make-kd-tree :points *points*
+		  :perm *perm*
+		  :root root)))
 #+nil
 (let* ((n 300))
-   (setf 
-    *perm* (make-perm n)
-    *points* (make-random-points n))
-   (defparameter *tree* (build 0 (1- n))))
+  (defparameter *tree* (build-new-tree (make-random-points n))))
 
-(defun distance2 (i j)
-  (let ((sum 0))
+(defun distance^2 (i j)
+  (declare (array-index i j)
+	   (values double-float &optional))
+  (let ((sum 0d0))
     (dotimes (k +dim+)
       (let ((v (- (px i k) (px j k))))
 	(incf sum (* v v))))
     sum))
 
-(defun nn (target tree perm)
-  (let ((dist 1e20)
-	(nearest 0))
-    (labels ((rec (node)
-	       (with-slots (bucket lopt hipt cutval cutdim loson hison)
-		   node
-		(if bucket
-		    (loop for i from lopt upto hipt do
-			 (let ((d (distance2 (aref perm i) target)))
-			   (when (< d dist)
-			     (setf dist d
-				   nearest (aref perm i)))))
-		    (let ((val cutval)
-			  (x (px target cutdim)))
-		      (if (< x val)
-			  (progn (rec loson)
-				 (when (< val (+ x dist))
-				   (rec hison)))
-			  (progn (rec hison)
-				 (when (< (- x dist) val)
-				   (rec loson)))))))))
-      (rec tree))
-    nearest))
+(defun nn (target kd-tree)
+   (declare (array-index target)
+	    (kd-tree kd-tree)
+	    (values array-index &optional))
+   (with-slots (perm points root)
+       kd-tree
+     (let* ((dist^2 1d20)
+	    (nearest 0)
+	    (*points* points)
+	    (*perm* perm))
+       (labels ((rec (node)
+		  (declare ((or leaf node) node))
+		  (etypecase node
+		    (leaf (with-slots (lopt hipt)
+			      node
+			    (loop for i from lopt upto hipt do
+				 (let ((d (distance^2 (aref perm i) target)))
+				   (when (< d dist^2)
+				     (setf dist^2 d
+					   nearest (aref perm i)))))))
+		    (node (with-slots (cutval cutdim loson hison)
+			      node
+			    (let ((x (px target cutdim)))
+			      (if (< x cutval)
+				  (progn (rec loson)
+					 (when (< cutval (+ x dist^2))
+					   (rec hison)))
+				  (progn (rec hison)
+					 (when (< (- x dist^2) cutval)
+					   (rec loson))))))))))
+	 (rec root))
+       nearest)))
 
 #+nil
-(nn 5 *tree* *perm*)
+(nn 4 *tree*)
 
-(defun split-box (dim box lo-p cut)
+(progn
+;; for debugging I draw the points and the rectangles into an eps
+;; file.  There is also a function that writes the tree in a format
+;; that the program dot (from the graphviz) package can render in a
+;; postscript image of the trees graph structure.
+
+(defun split-box (dim box lo-p cut) ;; its actually not box but rectangle
+  "A box is a list 4 values (the coordinates of the min and max
+point). This function splits it along the direction DIM (which is
+either 0 or 1). When LO-P is true the part with the lower values is
+returned."
+  (declare ((member 0 1) dim)
+	   (list box)
+	   (boolean lo-p)
+	   (double-float cut)
+	   (values list &optional))
   (destructuring-bind (px py qx qy)
       box
     (if (eq dim 0)
-	(if lo-p
-	    (list px py cut qy)
-	    (list cut py qx qy))
-	(if lo-p
-	    (list px py qx cut)
-	    (list px cut qx qy)))))
+	 (if lo-p
+	     (list px py cut qy)
+	     (list cut py qx qy))
+	 (if lo-p
+	     (list px py qx cut)
+	     (list px cut qx qy)))))
 #+nil
 (split-box 0 (list 0 0 1 1) t .5)
 
 (defun readable-float (x)
+  "Prints only a few digits of a float X into a string, to make the
+output more readable."
   (read-from-string 
    (format nil "~2,4f" x)))
 
-(defun draw-tree-boxes (tree)
+
+(defun draw-tree-boxes (root)
+  (declare (node root))
   (let ((boxes nil))
-   (labels ((rec (node box)
-	      (with-slots (bucket loson hison cutdim cutval)
-		  node
-		(unless bucket
-		  (when (or (node-bucket loson)
-			    (node-bucket hison))
+    ;; add boxes of only those nodes at the bottom of the tree, that
+    ;; have a leaf in loson or hison
+    (labels ((rec (node box)
+	      (when (typep node 'node)
+		(with-slots (loson hison cutdim cutval)
+		    node
+		  (when (or (typep loson 'leaf)
+			    (typep hison 'leaf))
 		    (push box boxes)
 		    #+nil (format t "~a~%" (mapcar #'readable-float box)))
 		  (rec loson (split-box cutdim box t cutval))
 		  (rec hison (split-box cutdim box nil cutval))))))
-     (rec tree (list 0 0 1 1)))
-   boxes))
+      (rec root (list 0d0 0d0 1d0 1d0)))
+    boxes))
 
 #+nil
 (defparameter *boxes*
- (draw-tree-boxes *tree*))
+  (draw-tree-boxes (kd-tree-root *tree*)))
 
 (defun dot-draw-tree (stream root)
+  "Convert the tree into input for the program dot. The output can be
+converted with dot -Tps -o test.ps file.dot."
+  (declare (node root))
   (labels ((transform-dim (cutdim)
 	     (ecase cutdim
 	       (0 'x)
 	       (1 'y)))
 	   (rec (node)
-	     (with-slots (bucket hison loson cutdim cutval hipt lopt)
-		 node
-	       (unless bucket
-		 (labels ((down (node)
-			    (with-slots (bucket cutdim cutval lopt hipt)
-				node
-			      (if bucket
-				  (list lopt hipt)
-				  (list (transform-dim cutdim)
-					(readable-float cutval))))))
+	     (declare ((or node leaf) node))
+	     (when (typep node 'node)
+	       (with-slots (hison loson cutdim cutval)
+		   node
+		 (labels ((print-daughter (node)
+			    (declare ((or node leaf) node))
+			    (etypecase node
+			      (leaf (list (leaf-lopt node)
+					  (leaf-hipt node)))
+			      (node (list (transform-dim (node-cutdim node))
+					(readable-float (node-cutval node)))))))
 		   (let ((here (list (transform-dim cutdim)
 				     (readable-float cutval)))
-			 (left (down loson))
-			 (right (down hison)))
+			 (left (print-daughter loson))
+			 (right (print-daughter hison)))
 		     (format stream "\"~a\" -> \"~a\";~%"
 			     here left)
 		     (format stream "\"~a\" -> \"~a\";~%"
@@ -216,49 +323,22 @@
 #+nil
 (with-open-file (s "/home/martin/tmp/tree.dot" :direction :output
 		   :if-exists :supersede)
- (dot-draw-tree s *tree*))
-
-#+nil (defun draw-tree (root minx maxx miny maxy)
-  (let ((boxes (list (list minx maxx miny maxy))))
-   (labels ((rec (root)
-	      (with-slots (bucket hison loson
-				  cutdim cutval)
-		  root
-		(unless bucket
-		  (ecase cutdim
-		    (0 (setf maxy cutval))
-		    (1 (setf minx cutval)))
-		  (push (list minx maxx miny maxy) boxes)
-		  (rec hison)
-		  (ecase cutdim
-		    (0 (setf miny cutval))
-		    (1 (setf maxx cutval)))
-		  (push (list minx maxx miny maxy) boxes)
-		  (rec loson)))))
-     (rec root))
-   (loop for b in boxes collect
-	(destructuring-bind (a b c d)
-	    b
-	  (list (read-from-string (format nil "~2,4f" a))
-		(read-from-string (format nil "~2,4f" b))
-		(read-from-string (format nil "~2,4f" c))
-		(read-from-string (format nil "~2,4f" d)))))))
-
-#+nil
-(defparameter *boxes*
- (draw-tree *tree* 0 1 0 1))
-
+ (dot-draw-tree s (kd-tree-root *tree*)))
 
 (defun eps-moveto (x y)
+  (declare (double-float x y))
   (format nil "~f ~f moveto~%" x y))
 
 (defun eps-lineto (x y)
+  (declare (double-float x y))
   (format nil "~f ~f lineto~%" x y))
 
 (defun eps-rectangle (box)
+  (declare (list box))
   (destructuring-bind (x0 y0 x y)
       box
-   (format nil "newpath~%~a~a~a~a~astroke~%"
+    (declare (double-float x0 y0 x y))
+    (format nil "newpath~%~a~a~a~a~astroke~%"
 	   (eps-moveto x0 y0)
 	   (eps-lineto x y0)
 	   (eps-lineto x y)
@@ -266,11 +346,15 @@
 	   (eps-lineto x0 y0))))
 
 (defun eps-point (x y)
+  (declare (double-float x y))
   (format nil "newpath ~f ~f 0.004 0 360 arc closepath fill~%" x y))
 
 
-(defun eps-tree (boxes)
-  (with-open-file (s "/home/martin/tmp/tree.eps" :direction :output
+(defun eps-tree (fn boxes points)
+  (declare (list boxes)
+	   ((simple-array vec2 1) points)
+	   (string fn))
+  (with-open-file (s fn :direction :output
 		     :if-exists :supersede)
     (format s "%!PS-Adobe-3.0
 %%Pages: 1
@@ -282,9 +366,15 @@
 0 setgray~%")
    (loop for b in boxes do
 	(format s "~a" (eps-rectangle b)))
-   (loop for p across *points* do
-     (format s "~a" (eps-point (aref p 0) (aref p 1))))
+   (loop for p across points do
+	(format s "~a" (eps-point (aref p 0) (aref p 1))))
    (format s "%%EOF")))
 
 #+nil
-(eps-tree *boxes*)
+(progn
+  (let* ((n 30))
+    (defparameter *tree* (build-new-tree (make-random-points n))))
+  (defparameter *boxes* (draw-tree-boxes (kd-tree-root *tree*)))
+  (eps-tree "/home/martin/tmp/tree.eps" *boxes*
+	    (kd-tree-points *tree*)))
+)
