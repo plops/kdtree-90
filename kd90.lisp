@@ -6,7 +6,12 @@
 (declaim (optimize (speed 2) (safety 3) (debug 3)))
 
 (defpackage :kdtree
-  (:use :cl :alexandria))
+  (:use :cl :alexandria)
+  (:export #:build-new-tree
+	   #:nearest-neighbour
+	   #:kd-tree-points
+	   #:perm
+	   #:get-tree-point))
 
 (in-package :kdtree)
 
@@ -48,6 +53,15 @@
   (declare (array-index i j)
 	   (values double-float &optional))
   (aref (aref *points* (aref *perm* i)) j))
+
+(defun get-tree-point (kd-tree i)
+  (declare (kd-tree kd-tree)
+	   (fixnum i)
+	   (values vec &optional))
+  (with-slots (points
+	       perm)
+      kd-tree
+    (aref points (aref perm i))))
 
 (defun max-spread-in-dim (dim l u)
   (declare (array-index l u)
@@ -199,7 +213,7 @@
 	(incf sum (* v v))))
     (sqrt sum)))
 
-(defun nn (target kd-tree)
+(defun nearest-neighbour (target kd-tree)
    (declare (array-index target)
 	    (kd-tree kd-tree)
 	    (values array-index &optional))
@@ -239,7 +253,7 @@
 #+nil
 (let* ((n 30000))
   (time (defparameter *tree* (build-new-tree (make-random-points n))))
-  (time (dotimes (i n) (nn i *tree*))))
+  (time (dotimes (i n) (nearest-neighbour i *tree*))))
 
 ;; 10s to find all nn for 30000 points when 2, 9 or 14 points in bucket
 ;; 11.5s for 20 points in bucket
