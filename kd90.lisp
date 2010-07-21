@@ -1,7 +1,21 @@
 #.(require :alexandria)
-#.(require :vector)
 
-;; p0717/1990bentley_kdtree-c++.pdf
+;; Implementation of kd-trees, a datastructure that stores points of a
+;; k-dimensional space and enables quick nearest neighbour search.  I
+;; write an application that captures z-stacks of c. elegans embryos
+;; (small worms) with a microscope. I hope I can follow the centers of
+;; single cells as the embyro splits into more and more cells.  This
+;; file contains code for debugging output showing the 2d rectangle
+;; filled with random points and the corresponding boxes that make up
+;; the tree. There is also code to output the final tree as input for
+;; dot (apt-get install graphviz) to render a postscript image of the
+;; tree. You can see screenshots of those on
+;; http://imgur.com/dyzhC&eGPb9l
+
+;; 2010-07-21 kielhorn.martin@googlemail.com
+
+
+;; the paper I read for this is 1990bentley_kdtree-c++.pdf
 
 (declaim (optimize (speed 2) (safety 3) (debug 3)))
 
@@ -15,13 +29,11 @@
 
 (in-package :kdtree)
 
-(defconstant +dim+ 3)
+(defconstant +dim+ 2) ;; you can set this to three but then the postscript output doesn't work
 (declaim (fixnum +dim+))
 
 (deftype vec ()
-  (ecase +dim+
-    (2 'vector:vec2)
-    (3 'vector:vec)))
+  `(simple-array double-float (#.+dim+)))
 
 (deftype axis ()
   `(member ,@(loop for i below +dim+ collect i)))
@@ -163,7 +175,7 @@
 	       (when (<= m j) (setf u (1- j)))
 	       (when (<= j m) (setf l i))))))))
 
-#+nil
+#+nil 
 (let* ((n 35)
        (*perm* (make-perm n))
        (*points* (make-random-points n)))
@@ -175,7 +187,7 @@
 (defun build (l u)
   (declare (array-index l u)
 	   (values (or node leaf) &optional))
-  (let ((points-in-bucket 14))
+  (let ((points-in-bucket 2)) ;; change this back to somewhere like 14 for better performance
    (if (<= (1+ (- u l)) (1- points-in-bucket))
        (make-leaf :lopt l
 		  :hipt u)
@@ -258,7 +270,9 @@
 ;; 10s to find all nn for 30000 points when 2, 9 or 14 points in bucket
 ;; 11.5s for 20 points in bucket
 ;; 14s for 50 points in bucket
-#+nil
+
+
+;; the following functions generate debugging output but only work for +dim+=2
 (progn
 ;; for debugging I draw the points and the rectangles into an eps
 ;; file.  There is also a function that writes the tree in a format
@@ -402,7 +416,7 @@ converted with dot -Tps -o test.ps file.dot."
 
 #+nil
 (progn
-  (let* ((n 30))
+  (let* ((n 300))
     (defparameter *tree* (build-new-tree (make-random-points n))))
   (defparameter *boxes* (draw-tree-boxes (kd-tree-root *tree*)))
   (eps-tree "/home/martin/tmp/tree.eps" *boxes*
